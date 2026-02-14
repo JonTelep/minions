@@ -1,0 +1,25 @@
+{
+  "name": "minions",
+  "version": "0.1.0",
+  "description": "Universal agent orchestration system - Opus plans, Sonnet executes",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "minions": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "migrate": "psql postgresql://postgres:postgres@localhost:5432/postgres -f migrations/001_initial.sql"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
