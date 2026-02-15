@@ -18,15 +18,18 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd --gid 1001 nodejs && \
     useradd --uid 1001 --gid nodejs --shell /bin/bash --create-home minions
 
-# Copy package files and install dependencies
+# Copy package files and install all dependencies (including devDependencies for build)
 COPY package*.json ./
-RUN npm ci --production && npm cache clean --force
+RUN npm ci
 
 # Copy source code and build
 COPY tsconfig.json ./
 COPY src/ src/
 COPY migrations/ migrations/
 RUN npx tsc
+
+# Remove devDependencies after build
+RUN npm prune --omit=dev && npm cache clean --force
 
 # Change ownership to non-root user  
 RUN chown -R minions:nodejs /app

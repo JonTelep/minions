@@ -125,7 +125,7 @@ export async function executeAgent(
     const enhancedResult: AgentResult = {
       ...result,
       data: {
-        ...result.data,
+        ...(result.data as Record<string, unknown>),
         execution_metadata: {
           model: model,
           timeout: timeout,
