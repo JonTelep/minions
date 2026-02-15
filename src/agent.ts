@@ -1,23 +1,17 @@
 /**
- * Agent - Spawns and manages Claude Code (Sonnet) agents
+ * Agent - Executes tasks via the Anthropic Messages API
  *
- * Each agent runs as a subprocess via `claude` CLI.
+ * Each agent call sends a focused prompt to the Anthropic API.
  * The orchestrator feeds it ONLY:
  * 1. Its specific task description
  * 2. Relevant blackboard context
  * 3. Tool usage instructions
  * 4. Expected output format
  *
- * Agents write results as JSON to stdout.
  * Results are parsed and written to the blackboard.
  */
 
-import { execSync } from 'child_process';
-import { writeFileSync, unlinkSync } from 'fs';
-import type { AgentPrompt, AgentResult, BlackboardEntry, Tool } from './types.js';
-import { openclawBridge } from './openclaw-integration.js';
-import { realIntegration } from './real-integration.js';
-import { finalIntegration } from './final-integration.js';
+import type { AgentResult, BlackboardEntry, Tool } from './types.js';
 
 const AGENT_SYSTEM = `You are a focused agent in an orchestration system. You have ONE task to complete.
 
@@ -52,6 +46,15 @@ When done, output a JSON block with your results:
   "confidence": 0.85
 }
 \`\`\``;
+
+/**
+ * Strip the "anthropic/" prefix that .env uses (e.g. "anthropic/claude-sonnet-4-20250514"
+ * becomes "claude-sonnet-4-20250514" which is what the API expects).
+ */
+function resolveModel(raw?: string): string {
+  const model = raw || process.env.DEFAULT_MODEL || 'claude-sonnet-4-20250514';
+  return model.replace(/^anthropic\//, '');
+}
 
 /**
  * Build the full prompt for an agent
@@ -96,10 +99,7 @@ export function buildAgentPrompt(
 }
 
 /**
- * Execute an agent via FINAL OpenClaw Integration
- *
- * Iteration 5: ACTUAL OpenClaw function calls with sessions_spawn.
- * This is the ultimate agent execution system with production-ready function calls.
+ * Execute an agent via the Anthropic Messages API
  */
 export async function executeAgent(
   prompt: string,
@@ -109,64 +109,82 @@ export async function executeAgent(
     workdir?: string;
   }
 ): Promise<AgentResult> {
-  const model = opts?.model === 'sonnet' ? 'anthropic/claude-sonnet-4-20250514' : (opts?.model || 'anthropic/claude-sonnet-4-20250514');
-  const timeout = opts?.timeout || 180; // Reduced for actual function calls
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error('ANTHROPIC_API_KEY environment variable is required');
+  }
+
+  const model = resolveModel(opts?.model);
+  const timeoutSec = opts?.timeout || 300;
+
+  console.log(`[Agent] Calling Anthropic API with model: ${model}`);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
 
   try {
-    console.log(`[Agent] Starting ACTUAL FUNCTION CALL execution with model: ${model}`);
-    
-    // Use the FINAL integration with ACTUAL function calls
-    const result = await finalIntegration.executeAgent(AGENT_SYSTEM, prompt, {
-      model,
-      timeout
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 4096,
+        system: AGENT_SYSTEM,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: controller.signal,
     });
 
-    // Enhance the result with Iteration 5 final metadata
-    const enhancedResult: AgentResult = {
-      ...result,
-      data: {
-        ...(result.data as Record<string, unknown>),
-        execution_metadata: {
-          model: model,
-          timeout: timeout,
-          timestamp: new Date().toISOString(),
-          iteration: "iteration_5_final",
-          integration_type: "actual_openclaw_function_calls"
-        }
-      },
-      entries: [
-        ...result.entries,
-        {
-          key: "iteration_5_final_execution",
-          value: {
-            model: model,
-            timeout: timeout,
-            timestamp: new Date().toISOString(),
-            execution_type: "actual_function_calls",
-            success: result.success,
-            confidence: result.confidence,
-            final_integration: true
-          },
-          tags: ["iteration-5", "final-integration", "actual-functions"],
-          entity_ids: []
-        }
-      ],
-      confidence: result.success ? Math.max(result.confidence, 1.0) : result.confidence // Maximum confidence!
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Anthropic API ${response.status}: ${body}`);
+    }
+
+    const json = await response.json() as {
+      content: Array<{ type: string; text?: string }>;
     };
 
-    console.log(`[Agent] ACTUAL FUNCTION CALL execution completed with confidence: ${enhancedResult.confidence}`);
-    return enhancedResult;
+    // Extract text from response content blocks
+    const text = json.content
+      .filter((b) => b.type === 'text' && b.text)
+      .map((b) => b.text)
+      .join('\n');
 
+    if (!text) {
+      throw new Error('Anthropic API returned no text content');
+    }
+
+    console.log(`[Agent] Got ${text.length} chars response`);
+
+    return parseAgentOutput(text);
   } catch (error: any) {
-    console.log(`[Agent] ACTUAL FUNCTION CALL execution failed: ${error.message}`);
+    if (error.name === 'AbortError') {
+      console.log(`[Agent] Request timed out after ${timeoutSec}s`);
+      return {
+        success: false,
+        data: null,
+        entries: [],
+        artifacts: [],
+        confidence: 0,
+        error: `Agent timed out after ${timeoutSec}s`,
+      };
+    }
+
+    console.log(`[Agent] API call failed: ${error.message}`);
     return {
       success: false,
       data: null,
       entries: [],
       artifacts: [],
       confidence: 0,
-      error: `Actual function call execution failed: ${error.message}`,
+      error: `Agent execution failed: ${error.message}`,
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

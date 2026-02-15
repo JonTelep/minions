@@ -1,4 +1,4 @@
-.PHONY: install build dev run migrate tools history clean test up down logs restart
+.PHONY: install build dev run task migrate tools history clean test up down logs restart status help
 
 # Load environment variables
 ifneq (,$(wildcard ./.env))
@@ -21,8 +21,12 @@ setup: install
 	@echo "✅ Setup complete! Edit .env if needed, then run 'make up' to start services"
 
 # 🏗️ Build & Development
-build:
+build: node_modules
 	npx tsc
+
+node_modules: package.json
+	npm install
+	@touch node_modules
 
 dev: build
 	npx tsx src/cli.ts $(ARGS)
@@ -40,7 +44,7 @@ up:
 		--network=host \
 		-e POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
 		-v minions-data:/var/lib/postgresql/data \
-		postgres:15-alpine
+		docker.io/library/postgres:15-alpine
 	@echo "⏳ Waiting for PostgreSQL to start..."
 	@sleep 3
 	$(MAKE) migrate
@@ -72,9 +76,8 @@ db-reset:
 	psql "$(DATABASE_URL)" -c "DROP SCHEMA IF EXISTS minions CASCADE; CREATE SCHEMA minions;"
 	$(MAKE) migrate
 
-# 🤖 Minions Operations  
-run:
-	@echo "🤖 Executing task: $(TASK)"
+# 🤖 Minions Operations
+run task:
 	npx tsx src/cli.ts run "$(TASK)"
 
 tools:
@@ -95,15 +98,14 @@ run-container: image
 	podman run --rm -it \
 		--network=host \
 		-e DATABASE_URL=$(DATABASE_URL) \
-		$(IMAGE_NAME) $(ARGS)
+		-e ANTHROPIC_API_KEY=$(ANTHROPIC_API_KEY) \
+		$(IMAGE_NAME) node dist/cli.js run "$(TASK)"
 
 # 🧹 Cleanup
-clean:
-	rm -rf dist node_modules
-
-clean-all: down clean
+clean: down
 	podman volume rm minions-data || true
 	podman rmi $(IMAGE_NAME) || true
+	rm -rf dist node_modules
 
 # 📊 Status & Info
 status:
@@ -129,17 +131,17 @@ help:
 	@echo "  make test      - Run tests"
 	@echo ""
 	@echo "Minions Operations:"
-	@echo "  make run TASK='...'  - Execute a task"
-	@echo "  make tools           - List available tools"
-	@echo "  make history         - Show run history"
-	@echo "  make show ID=...     - Show run details"
+	@echo "  make task TASK='...'         - Execute a task"
+	@echo "  make run TASK='...'          - (alias for task)"
+	@echo "  make run-container TASK='..' - Run task in container"
+	@echo "  make tools                   - List available tools"
+	@echo "  make history                 - Show run history"
+	@echo "  make show ID=...             - Show run details"
 	@echo ""
 	@echo "Container Operations:"
 	@echo "  make image           - Build container image"
-	@echo "  make run-container   - Run in container"
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make status    - Show system status"
 	@echo "  make logs      - Show PostgreSQL logs"
-	@echo "  make clean     - Clean build files"
-	@echo "  make clean-all - Full cleanup (containers + data)"
+	@echo "  make clean     - Full cleanup (containers, images, build files)"

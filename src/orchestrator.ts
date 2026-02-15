@@ -12,7 +12,6 @@
  */
 
 import { Blackboard } from './blackboard.js';
-import { generatePlan } from './planner.js';
 import { generateEnhancedPlan } from './enhanced-planner.js';
 import { buildAgentPrompt, executeAgent } from './agent.js';
 import type { ExecutionPlan, Phase, PlannedTask, AgentTask, Run } from './types.js';
